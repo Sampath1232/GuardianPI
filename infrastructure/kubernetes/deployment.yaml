@@ -1,0 +1,267 @@
+# Guardian Pi — Kubernetes Full Stack Deployment
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: guardian-pi
+  labels:
+    app.kubernetes.io/name: guardian-pi
+---
+# ── Secrets ────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: guardian-pi-secrets
+  namespace: guardian-pi
+type: Opaque
+stringData:
+  SECRET_KEY: "CHANGE-ME-IN-PRODUCTION-use-64-char-random"
+  JWT_SECRET_KEY: "CHANGE-ME-DIFFERENT-64-char-random"
+  DATABASE_URL: "postgresql+asyncpg://guardian:guardian_secret@guardian-db:5432/guardianpi"
+  REDIS_URL: "redis://:guardian_redis@guardian-redis:6379/0"
+  AGENT_API_KEYS: '["gpi_prod_key_change_me"]'
+---
+# ── API Deployment ─────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guardian-api
+  namespace: guardian-pi
+  labels: &api-labels
+    app: guardian-pi
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels: *api-labels
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels: *api-labels
+    spec:
+      serviceAccountName: guardian-pi-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: guardian-pi-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - secretRef:
+                name: guardian-pi-secrets
+            - configMapRef:
+                name: guardian-pi-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/ready
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+# ── API Service ────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: guardian-api
+  namespace: guardian-pi
+spec:
+  selector:
+    app: guardian-pi
+    component: api
+  ports:
+    - port: 80
+      targetPort: 8000
+      name: http
+  type: ClusterIP
+---
+# ── ConfigMap ──────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guardian-pi-config
+  namespace: guardian-pi
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "WARNING"
+  API_V1_PREFIX: "/api/v1"
+  CORS_ORIGINS: '["https://console.guardianpi.io"]'
+---
+# ── ServiceAccount ─────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: guardian-pi-sa
+  namespace: guardian-pi
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/guardian-pi-app-role
+---
+# ── Edge Agent DaemonSet ───────────────────────────────────
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: guardian-edge-agent
+  namespace: guardian-pi
+  labels: &agent-labels
+    app: guardian-pi
+    component: edge-agent
+spec:
+  selector:
+    matchLabels: *agent-labels
+  template:
+    metadata:
+      labels: *agent-labels
+    spec:
+      containers:
+        - name: agent
+          image: guardian-edge-agent:latest
+          args: ["--server", "http://guardian-api:80", "--api-key", "gpi_prod_key_change_me"]
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: queue
+              mountPath: /.guardian_queue
+      volumes:
+        - name: queue
+          emptyDir:
+            sizeLimit: 50Mi
+---
+# ── Horizontal Pod Autoscaler ──────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: guardian-api-hpa
+  namespace: guardian-pi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: guardian-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# ── Network Policy ─────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: guardian-api-policy
+  namespace: guardian-pi
+spec:
+  podSelector:
+    matchLabels:
+      app: guardian-pi
+      component: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8000
+    - from:
+        - podSelector:
+            matchLabels:
+              component: edge-agent
+      ports:
+        - port: 8000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: guardian-db
+      ports:
+        - port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: guardian-redis
+      ports:
+        - port: 6379
+    - to: # Allow HTTPS outbound (AWS, updates)
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+---
+# ── Ingress ────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: guardian-api-ingress
+  namespace: guardian-pi
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/websocket-services: "guardian-api"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.guardianpi.io
+      secretName: guardian-api-tls
+  rules:
+    - host: api.guardianpi.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: guardian-api
+                port:
+                  number: 80

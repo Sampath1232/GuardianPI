@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>GuardianPi Security Dashboard</h1>
+
+<div class="cards">
+
+    <div class="card">
+
+        <h2>CPU Usage</h2>
+
+        <h1 id="cpu">0%</h1>
+
+    </div>
+
+    <div class="card">
+
+        <h2>RAM Usage</h2>
+
+        <h1 id="ram">0%</h1>
+
+    </div>
+
+    <div class="card">
+
+        <h2>Disk Usage</h2>
+
+        <h1 id="disk">0%</h1>
+
+    </div>
+
+</div>
+
+<div class="chart-container">
+
+    <canvas id="systemChart"></canvas>
+
+</div>
+
+<script>
+
+const cpuText = document.getElementById('cpu');
+
+const ramText = document.getElementById('ram');
+
+const diskText = document.getElementById('disk');
+
+const ctx = document.getElementById('systemChart');
+
+const systemChart = new Chart(ctx, {
+
+    type: 'line',
+
+    data: {
+
+        labels: [],
+
+        datasets: [
+
+            {
+
+                label: 'CPU',
+
+                data: []
+            },
+
+            {
+
+                label: 'RAM',
+
+                data: []
+            },
+
+            {
+
+                label: 'Disk',
+
+                data: []
+            }
+
+        ]
+    }
+});
+
+async function loadStats() {
+
+    const response = await fetch('/api/stats');
+
+    const data = await response.json();
+
+    cpuText.innerText = data.cpu + '%';
+
+    ramText.innerText = data.ram + '%';
+
+    diskText.innerText = data.disk + '%';
+
+    const time = new Date().toLocaleTimeString();
+
+    systemChart.data.labels.push(time);
+
+    systemChart.data.datasets[0].data.push(data.cpu);
+
+    systemChart.data.datasets[1].data.push(data.ram);
+
+    systemChart.data.datasets[2].data.push(data.disk);
+
+    if(systemChart.data.labels.length > 10) {
+
+        systemChart.data.labels.shift();
+
+        systemChart.data.datasets.forEach(dataset => {
+
+            dataset.data.shift();
+        });
+    }
+
+    systemChart.update();
+}
+
+setInterval(loadStats, 2000);
+
+loadStats();
+
+</script>
+
+{% endblock %}

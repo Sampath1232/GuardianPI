@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>Upload & Scan</h1>
+
+<form method="POST" enctype="multipart/form-data">
+
+    <input type="file" name="file">
+
+    <button type="submit">
+
+        Scan File
+
+    </button>
+
+</form>
+
+{% if result %}
+
+<div class="card">
+
+    <h2>Scan Result</h2>
+
+    <p>Status: {{ result.status }}</p>
+
+    {% if result.reason %}
+
+    <p>Reason: {{ result.reason }}</p>
+
+    {% endif %}
+
+</div>
+
+{% endif %}
+
+{% endblock %}

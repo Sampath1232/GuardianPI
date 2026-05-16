@@ -1,0 +1,86 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Guardian Pi — Security Overview",
+    "tags": ["security", "guardian-pi"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Devices Online",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {"expr": "guardian_devices_online", "legendFormat": "Online"}
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "fixed", "fixedColor": "green"},
+            "thresholds": {"steps": [{"value": 0, "color": "red"}, {"value": 1, "color": "green"}]}
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Open Alerts",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {"expr": "guardian_alerts_open", "legendFormat": "Open"}
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {"steps": [{"value": 0, "color": "green"}, {"value": 5, "color": "yellow"}, {"value": 10, "color": "red"}]}
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Critical Alerts",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {"expr": "guardian_alerts_critical", "legendFormat": "Critical"}
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "fixed", "fixedColor": "red"}
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "WebSocket Connections",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {"expr": "guardian_ws_connections", "legendFormat": "Active"}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "API Uptime",
+        "type": "gauge",
+        "gridPos": {"h": 6, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {"expr": "guardian_uptime_seconds / 3600", "legendFormat": "Hours"}
+        ],
+        "fieldConfig": {
+          "defaults": {"unit": "h", "min": 0, "max": 720}
+        }
+      },
+      {
+        "id": 6,
+        "title": "Alerts Over Time",
+        "type": "timeseries",
+        "gridPos": {"h": 6, "w": 12, "x": 12, "y": 4},
+        "targets": [
+          {"expr": "rate(guardian_alerts_total[5m])", "legendFormat": "Alerts/sec"}
+        ]
+      }
+    ],
+    "time": {"from": "now-6h", "to": "now"},
+    "refresh": "30s"
+  }
+}

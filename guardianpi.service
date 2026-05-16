@@ -1,0 +1,26 @@
+[Unit]
+Description=Guardian Pi Security Agent
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=guardian
+Group=guardian
+WorkingDirectory=/opt/guardian-pi/agent
+ExecStart=/opt/guardian-pi/venv/bin/python guardian_agent.py --server https://api.guardianpi.example.com --api-key ${AGENT_API_KEY}
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-pi
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/guardian-pi/logs
+
+[Install]
+WantedBy=multi-user.target

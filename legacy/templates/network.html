@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>Network Scanner</h1>
+
+<button onclick="scanNetwork()">
+
+Start Scan
+
+</button>
+
+<div class="card">
+
+    <pre id="results">
+
+No scan yet
+
+    </pre>
+
+</div>
+
+<script>
+
+async function scanNetwork() {
+
+    document.getElementById('results').innerText = "Scanning...";
+
+    const response = await fetch('/api/network-scan');
+
+    const data = await response.json();
+
+    document.getElementById('results').innerText = JSON.stringify(
+        data,
+        null,
+        2
+    );
+}
+
+</script>
+
+{% endblock %}

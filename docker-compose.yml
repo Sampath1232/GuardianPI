@@ -1,0 +1,196 @@
+version: "3.8"
+
+services:
+  # ── NGINX Reverse Proxy ──────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: guardian-proxy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+    networks:
+      - guardian-net
+
+  # ── Backend API ──────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: guardian-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://guardian:guardian_secret@postgres:5432/guardianpi
+      - TIMESCALE_URL=postgresql://guardian:guardian_secret@timescaledb:5433/guardian_telemetry
+      - REDIS_URL=redis://:guardian_redis_secret@redis:6379/0
+      - NATS_URL=nats://nats:4222
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
+      - AGENT_API_KEYS=["gpi_dev_test_key_change_in_production"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - guardian-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/api/v1/health/live').raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── PostgreSQL (Primary Data) ────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: guardian-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guardianpi
+      POSTGRES_USER: guardian
+      POSTGRES_PASSWORD: guardian_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - guardian-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guardian -d guardianpi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── TimescaleDB (Telemetry Time-Series) ──────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: guardian-timescale
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guardian_telemetry
+      POSTGRES_USER: guardian
+      POSTGRES_PASSWORD: guardian_secret
+    ports:
+      - "5433:5432"
+    volumes:
+      - tsdata:/var/lib/postgresql/data
+      - ./infrastructure/timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - guardian-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guardian -d guardian_telemetry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: guardian-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass guardian_redis_secret --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    networks:
+      - guardian-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "guardian_redis_secret", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── NATS (Real-Time Messaging) ───────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    container_name: guardian-nats
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "--jetstream --store_dir /data/jetstream -m 8222"
+    volumes:
+      - natsdata:/data
+    networks:
+      - guardian-net
+
+  # ── Prometheus ───────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: guardian-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - guardian-net
+
+  # ── Grafana ──────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: guardian-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=guardian_admin
+      - GF_USERS_DEFAULT_THEME=dark
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - guardian-net
+
+  # ── Loki (Centralized Logging) ───────────────────────────────
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: guardian-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - lokidata:/loki
+    networks:
+      - guardian-net
+
+  # ── Go Edge Agent (Example) ─────────────────────────────────
+  edge-agent:
+    build:
+      context: ./edge-agent
+      dockerfile: Dockerfile
+    container_name: guardian-edge-agent
+    environment:
+      - GPI_DEVICE_ID=edge-docker-01
+    command: ["./guardian-agent", "--server", "http://backend:8000", "--api-key", "gpi_dev_test_key_change_in_production"]
+    depends_on:
+      - backend
+    networks:
+      - guardian-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+volumes:
+  pgdata:
+  tsdata:
+  redisdata:
+  natsdata:
+  grafanadata:
+  lokidata:
+
+networks:
+  guardian-net:
+    driver: bridge

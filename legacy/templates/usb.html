@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>USB Monitor</h1>
+
+<button onclick="loadUSB()">
+
+Refresh Devices
+
+</button>
+
+<div class="card">
+
+<pre id="usb-results">
+
+No devices detected
+
+</pre>
+
+</div>
+
+<script>
+
+async function loadUSB() {
+
+    document.getElementById('usb-results').innerText =
+        "Scanning USB devices...";
+
+    try {
+
+        const response = await fetch('/api/usb');
+
+        const data = await response.json();
+
+        if(data.length === 0) {
+
+            document.getElementById('usb-results').innerText =
+                "No USB devices connected";
+
+            return;
+        }
+
+        document.getElementById('usb-results').innerText =
+            JSON.stringify(data, null, 2);
+
+    } catch(error) {
+
+        document.getElementById('usb-results').innerText =
+            "USB scan failed";
+    }
+}
+
+loadUSB();
+
+setInterval(loadUSB, 5000);
+
+</script>
+
+{% endblock %}

@@ -1,0 +1,173 @@
+# Guardian Pi — Full CI/CD Pipeline
+name: Guardian Pi CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/${{ github.repository }}/guardian-api
+  AGENT_IMAGE: ghcr.io/${{ github.repository }}/guardian-edge-agent
+
+jobs:
+  # ── Lint & SAST ──────────────────────────────────────────
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+
+      - name: Install lint tools
+        run: pip install ruff bandit pip-audit semgrep
+
+      - name: Ruff lint
+        run: ruff check backend/ agent/
+
+      - name: Bandit SAST
+        run: bandit -r backend/app/ -f json -o bandit-report.json -ll || true
+
+      - name: Dependency audit
+        run: pip-audit -r backend/requirements.txt --desc || true
+
+      - name: Semgrep SAST
+        run: semgrep scan --config auto backend/ --json --output semgrep.json || true
+
+      - name: Upload SAST results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-reports
+          path: |
+            bandit-report.json
+            semgrep.json
+
+  # ── Backend Tests ────────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: guardianpi_test
+          POSTGRES_USER: guardian
+          POSTGRES_PASSWORD: test_secret
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - name: Install deps
+        run: pip install -r backend/requirements.txt && pip install pytest pytest-asyncio pytest-cov httpx
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://guardian:test_secret@localhost:5432/guardianpi_test
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: development
+        run: pytest backend/tests/ -v --cov=backend/app --cov-report=xml --cov-report=term
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage-report, path: coverage.xml }
+
+  # ── Go Agent Tests ───────────────────────────────────────
+  agent-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - name: Go lint
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          cd edge-agent && golangci-lint run ./... || true
+      - name: Go test
+        run: cd edge-agent && go test ./... -v -race -coverprofile=coverage.out || true
+      - name: Go build (multi-arch)
+        run: |
+          cd edge-agent
+          GOOS=linux GOARCH=amd64 go build -o bin/guardian-agent-linux-amd64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 go build -o bin/guardian-agent-linux-arm64 ./cmd/agent
+          GOOS=windows GOARCH=amd64 go build -o bin/guardian-agent-windows.exe ./cmd/agent
+          GOOS=darwin GOARCH=arm64 go build -o bin/guardian-agent-darwin-arm64 ./cmd/agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-binaries
+          path: edge-agent/bin/
+
+  # ── Docker Build & Push ──────────────────────────────────
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [security-scan, backend-test, agent-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:latest
+
+      - name: Build & push Agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./edge-agent
+          push: true
+          tags: |
+            ${{ env.AGENT_IMAGE }}:${{ github.sha }}
+            ${{ env.AGENT_IMAGE }}:latest
+
+      - name: Trivy scan API
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.API_IMAGE }}:${{ github.sha }}
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Trivy scan Agent
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.AGENT_IMAGE }}:${{ github.sha }}
+          format: sarif
+          output: trivy-agent.sarif
+          severity: CRITICAL,HIGH
+
+  # ── Deploy to Staging ────────────────────────────────────
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+      - name: Deploy to staging
+        run: |
+          kubectl set image deployment/guardian-api api=${{ env.API_IMAGE }}:${{ github.sha }} -n guardian-pi
+          kubectl rollout status deployment/guardian-api -n guardian-pi --timeout=300s

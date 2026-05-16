@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>Threat Alerts</h1>
+
+<button onclick="loadThreats()">
+
+Scan Threats
+
+</button>
+
+<div class="card">
+
+<pre id="threats">
+
+No threats scanned yet
+
+</pre>
+
+</div>
+
+<script>
+
+async function loadThreats() {
+
+    document.getElementById('threats').innerText = "Scanning...";
+
+    const response = await fetch('/api/threats');
+
+    const data = await response.json();
+
+    if(data.length === 0) {
+
+        document.getElementById('threats').innerText =
+            "No Threats Detected";
+
+        return;
+    }
+
+    document.getElementById('threats').innerText =
+        JSON.stringify(data, null, 2);
+}
+
+</script>
+
+{% endblock %}

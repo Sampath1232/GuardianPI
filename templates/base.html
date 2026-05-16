@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GuardianPi</title>
+
+<link rel="stylesheet" href="/static/css/style.css">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+
+<body>
+
+<div class="sidebar">
+
+    <h2>GuardianPi</h2>
+
+    <a href="/">Dashboard</a>
+
+    <a href="/upload">Upload Scanner</a>
+
+    <a href="/network">Network Scanner</a>
+
+    <a href="/alerts">Threat Alerts</a>
+
+    <a href="/logs">Threat Logs</a>
+
+    <a href="/usb">USB Monitor</a>
+
+</div>
+
+<div class="main">
+
+{% block content %}
+
+{% endblock %}
+
+</div>
+
+</body>
+
+</html>
